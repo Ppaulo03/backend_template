@@ -1,5 +1,5 @@
 from auth import JWTToken, validate_token
-from fastapi import APIRouter, Request, Depends
+from fastapi import FastAPI, APIRouter, Request, Depends
 from typing import List, Callable, Optional, Any
 from inspect import signature
 
@@ -8,12 +8,21 @@ class Route:
 
     def __init__(
         self,
+        app: FastAPI,
+        prefix: str = "",
         public: bool = False,
         validate_access: Callable = validate_token,
     ) -> None:
         self.router = APIRouter()
         self.public = public
         self.validate_access = validate_access
+
+        self.register_routes()
+        app.include_router(self.router, prefix=prefix)
+
+    def register_routes(self) -> None:
+        """Método para ser sobrescrito nas rotas específicas."""
+        raise NotImplementedError("Método register_routes deve ser implementado.")
 
     def add_to_router(
         self,
@@ -34,15 +43,24 @@ class Route:
 
     def _wrap(self, handler: Callable, public: bool) -> Any:
         """Wrapper para injetar o token manualmente usando Depends."""
-        if public:
-            return handler
+        validate = (
+            self.validate_access
+            if not public
+            else lambda: JWTToken(user_id="public", session_id="")
+        )
 
-        async def endpoint(
-            request: Request, token: JWTToken = Depends(self.validate_access)
-        ):
+        async def endpoint(request: Request, token: JWTToken = Depends(validate)):
+            if await request.body():
+                data = await request.json()
+            else:
+                data = {}
+
             return await self._call_handler(
                 handler,
                 request=request,
+                **request.path_params,
+                **request.query_params,
+                **data,
                 **token.__dict__,
             )
 
